@@ -1,0 +1,99 @@
+[project]
+name = "rag"
+version = "0.1.0"
+description = "Production-grade local RAG pipeline built on LangChain + LangGraph"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    # --- orchestration -----------------------------------------------------
+    # The 1.x line is a requirement, not a preference. langchain_core.
+    # cross_encoders (used by reranking) does not exist in the 0.3 line, and
+    # EnsembleRetriever (used by the retrieval fallback) moved out of the
+    # langchain umbrella into the separate langchain-classic package. Floors
+    # are the versions this pipeline is verified against; a 0.3-era floor here
+    # declares compatibility with a combination that cannot even resolve
+    # against langchain-core>=1.
+    "langchain>=1.4.0",
+    "langchain-core>=1.6.2",
+    "langchain-classic>=1.0.8",
+    "langgraph>=1.2.11",
+    # --- component integrations -------------------------------------------
+    "langchain-huggingface>=1.2.2",
+    "langchain-qdrant>=1.1.0",
+    "langchain-text-splitters>=1.1.2",
+    "langchain-unstructured>=1.0.1",
+    # --- vector store ------------------------------------------------------
+    "qdrant-client>=1.15.1",
+    # Required, not transitive: the sparse half of the hybrid collection is
+    # FastEmbed's BM25 (Qdrant/bm25), and langchain-qdrant only pulls fastembed
+    # in behind its own optional extra.
+    "fastembed>=0.7.3",
+    # --- models ------------------------------------------------------------
+    "sentence-transformers>=6.0.1",
+    "transformers>=4.56.0",
+    "torch>=2.4.0",
+    # --- document parsing --------------------------------------------------
+    "unstructured[all-docs]>=0.27.5",
+    "pypdf>=6.18.0",
+    "ftfy>=6.3.1",
+    # --- lexical fallback retriever ---------------------------------------
+    "rank-bm25>=0.2.2",
+    # --- http api ----------------------------------------------------------
+    # The browser is the interface: FastAPI serves both the JSON API and the
+    # built React bundle from one process, because the embedded Qdrant store
+    # admits only one process at a time. python-multipart is FastAPI's
+    # requirement for multipart/form-data, which is how a file is uploaded.
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.20",
+    # Promoted from the dev extra once the web-search fallback landed: the
+    # server itself now makes outbound requests, so this is no longer a
+    # dependency only the tests have.
+    "httpx>=0.28.1",
+    # --- optional web search -----------------------------------------------
+    # The fallback for a question the corpus cannot answer. langchain-tavily
+    # is the backend with a free tier (1,000 searches a month) and the one
+    # that fetches page text in the same request. ddgs and trafilatura are the
+    # keyless backend: ddgs runs the search, trafilatura reads the pages it
+    # returns. Neither runs unless configured -- langchain-tavily is imported
+    # only when a Tavily key is present, ddgs only when it is not.
+    "langchain-tavily>=0.2.18",
+    "ddgs>=9.16.0",
+    "trafilatura>=2.2.0",
+    # --- infrastructure ----------------------------------------------------
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "rich>=13.9.0",
+]
+
+[project.optional-dependencies]
+# Generation backends. Retrieval, embedding, reranking and storage are all
+# local and free; only this stage calls a hosted API, and it stays off unless
+# RAG_ENABLE_GENERATION=true. LiteLLM is the gateway that speaks to OpenAI and
+# Groq alike, so neither vendor SDK is needed directly.
+llm = [
+    "litellm>=1.60.0",
+    "langchain-litellm>=0.7.1",
+]
+
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[project.scripts]
+# A server launcher, not a command set. The interface is the web UI.
+rag-server = "rag.api.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+filterwarnings = ["ignore::DeprecationWarning"]

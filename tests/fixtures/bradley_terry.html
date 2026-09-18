@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>The Bradley-Terry model — Example Encyclopedia</title>
+  </head>
+  <body>
+    <nav class="site-nav">
+      <a href="/">Home</a> <a href="/random">Random article</a>
+      <a href="/donate">Donate</a> <a href="/login">Log in</a> <a href="/signup">Sign up</a>
+    </nav>
+
+    <div class="cookie-banner">
+      We use cookies to improve your experience. Accept all cookies to continue
+      browsing this site, or manage your preferences in the settings panel.
+    </div>
+
+    <main>
+      <h1>The Bradley-Terry model</h1>
+
+      <p>
+        The Bradley-Terry model is a probability model for the outcome of
+        paired comparisons. It assigns each item a positive strength
+        parameter, and predicts that the probability of one item beating
+        another depends only on the ratio of their strengths.
+      </p>
+
+      <p>
+        Given two items i and j with strength parameters p_i and p_j, the model
+        states that the probability that i is preferred to j is the strength of
+        i divided by the sum of the two strengths. Equivalently, writing the
+        strengths as exponentials of real-valued scores, the probability is the
+        softmax of the two scores.
+      </p>
+
+      <p>
+        The model is widely used in ranking problems where only pairwise
+        outcomes are observed: chess and other games, consumer preference
+        studies, and the reward modelling stage of reinforcement learning from
+        human feedback, where a reward model is trained on pairs of responses
+        that a human annotator ranked.
+      </p>
+
+      <p>
+        Fitting the model is usually done by maximum likelihood. The likelihood
+        is concave in the log-strengths, so the optimum is unique up to an
+        additive constant, which is fixed by a normalisation such as setting
+        the strengths to sum to one.
+      </p>
+
+      <p>
+        A common criticism of the model is that it assumes transitivity: if i
+        beats j and j beats k, it cannot represent a cyclic preference. Extensions
+        relax this by allowing each item several strengths, one per context.
+      </p>
+    </main>
+
+    <footer class="site-footer">
+      <p>This page was last edited on 3 September 2026.</p>
+      <p>Text is available under a free documentation licence.</p>
+      <a href="/privacy">Privacy policy</a> <a href="/terms">Terms of use</a>
+    </footer>
+  </body>
+</html>

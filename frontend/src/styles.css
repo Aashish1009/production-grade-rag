@@ -1,0 +1,1462 @@
+/* ==========================================================================
+   Local RAG — paper and ink.
+
+   The subject is a personal research library, and the thing this page is for
+   is reading: passages, and answers that point back at a page in a book. So
+   the design is a reading surface, not a dashboard.
+
+   Three rules hold it together.
+
+   1. Paper and ink, light-first. Reading prose for minutes at a time is an
+      argument for a light ground, not a dark one.
+
+   2. Provenance is the spine. A citation mark and a page number are the two
+      things this tool exists to produce, so they are where the boldness is
+      spent -- set in oxblood, the page held in the margin the way a book
+      sets one.
+
+   3. Rules and space, not boxes. There is no card kit here: no rounded
+      containers, no soft shadows, no frosted glass, no gradients, no pills.
+      A section is a title, a hairline, and a margin.
+
+   Type is two families, clearly distinct and both already on the machine: a
+   serif for anything you read, a sans for anything you operate. No webfont is
+   fetched, because this is a local tool and it should work with the network
+   off -- which is also why the accent is a colour, not an icon font.
+
+   Every value a component needs is a token below; nothing downstream
+   hard-codes a hex.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* --- paper and ink ----------------------------------------------------- */
+  /* Deliberately a cool neutral off-white, not the warm cream that reads as
+     generated. The ink is near-black with a faint blue cast, which keeps the
+     serif from looking brown next to the oxblood. */
+  --paper: #f4f4f2;
+  --surface: #fbfbfa;
+  --ink: #17191c;
+  --ink-soft: #565d66;
+  --ink-faint: #838a94;
+  --rule: #dcdbd6;
+  --rule-soft: #e9e8e4;
+
+  /* --- provenance: the single accent ------------------------------------- */
+  /* Spent only on citation marks, page numbers, and the one thing that is
+     genuinely broken. Nothing decorative is ever this colour. */
+  --mark: #8a2b22;
+  --mark-wash: #f1e6e3;
+
+  /* --- status, deliberately desaturated ---------------------------------- */
+  /* This is not a dashboard. A status is a word; these only tint it. */
+  --ok: #3f6b4f;
+  --warn: #8a6a1f;
+
+  --focus: #2d5f8a;
+
+  /* --- type -------------------------------------------------------------- */
+  /* Two stacks, both system-resident. The serif is first in its list only
+     when the machine actually has it; every fallback is a real serif, so the
+     reading voice survives on a bare Windows box. */
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+    Georgia, serif;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
+
+  --t-xs: 11.5px;
+  --t-sm: 13px;
+  --t-base: 15px;
+  --t-read: 17px;
+  --t-lg: 20px;
+  --t-xl: 27px;
+
+  /* --- space ------------------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --rail: 320px;
+  /* The reading column. Fixed rather than fluid on purpose: a paragraph set
+     to the full width of a 27" monitor is unreadable, so the width is capped
+     and the whole shell is centred in whatever space is left. */
+  --pane: 700px;
+  --shell: calc(var(--rail) + var(--pane));
+  /* Line length for anything set in the serif. Long enough to be a paragraph,
+     short enough that the eye finds the next line without a ruler. */
+  --measure: 66ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    /* Not the light palette inverted -- the ink becomes the paper, and the
+       accent is lifted so oxblood still reads as red on a dark ground rather
+       than disappearing into it. */
+    --paper: #16181b;
+    --surface: #1c1f23;
+    --ink: #e6e4df;
+    --ink-soft: #9ba2ab;
+    --ink-faint: #767d86;
+    --rule: #2b3037;
+    --rule-soft: #23272d;
+
+    --mark: #cf7566;
+    --mark-wash: #2e2321;
+
+    --ok: #7fae8e;
+    --warn: #c9a961;
+
+    --focus: #7fb0dd;
+  }
+}
+
+/* ==========================================================================
+   Reset and page shell
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: var(--t-base);
+  line-height: 1.5;
+  color: var(--ink);
+  /* A plain ground. The previous revision layered two radial blooms behind
+     the content, which is the single most reliable way to make a page look
+     generated; paper does not glow. */
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--mark-wash);
+  color: var(--mark);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+h1,
+h2,
+h3,
+p,
+ol,
+ul,
+figure {
+  margin: 0;
+}
+
+ol,
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.88em;
+  padding: 0.1em 0.36em;
+  border-radius: 2px;
+  background: var(--rule-soft);
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.small {
+  font-size: var(--t-sm);
+}
+
+.muted {
+  color: var(--ink-faint);
+}
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  /* The page scrolls as one document rather than trapping each pane in its
+     own scroll region. Nothing has to fit on one screen, so nothing is
+     squeezed to make it. */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* A masthead, not a frosted toolbar: no blur, no translucent fill. Its
+   content is inset to land on the same vertical lines as the shell below it,
+   so the brand sits over the rail and the status over the reading column --
+   while the rule under it still runs the full width of the window, the way a
+   running head does across a spread. */
+.app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s5);
+  padding: var(--s5) max(var(--s6), calc((100% - var(--shell)) / 2 + var(--s6))) var(--s4);
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.brand-mark {
+  color: var(--mark);
+  align-self: center;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.brand-mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.brand-text h1 {
+  font-family: var(--serif);
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+}
+
+.brand-text p {
+  margin-top: 1px;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+
+.app-bar-spacer {
+  flex: 1;
+}
+
+/* Status is a word with a printer's mark beside it -- not a pill, not a
+   badge, no border. The word carries the meaning; the mark only tints it. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  flex-shrink: 0;
+  background: var(--ink-faint);
+}
+
+.dot-live {
+  background: var(--ok);
+}
+
+.dot-busy {
+  background: var(--warn);
+}
+
+.dot-bad {
+  background: var(--mark);
+}
+
+.dot-idle {
+  background: var(--ink-faint);
+}
+
+/* ==========================================================================
+   Two-pane layout
+   ========================================================================== */
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  align-items: start;
+  /* Centred, not stretched. Stretching the grid to the window is what left
+     the reading column hanging off the left edge with dead space beside it;
+     capping the shell and letting the margins absorb the rest keeps the
+     block on the optical centre of the page, the way a two-column spread
+     sits on paper. */
+  width: 100%;
+  max-width: var(--shell);
+  margin-inline: auto;
+}
+
+/* The catalogue margin: a column of sections, separated from the reading
+   column by one hairline rather than by a gap and two borders. */
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+  min-width: 0;
+  padding: var(--s6) var(--s5) var(--s7) var(--s6);
+  border-right: 1px solid var(--rule);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+  min-width: 0;
+  max-width: var(--pane);
+  padding: var(--s6) var(--s6) var(--s7) var(--s7);
+}
+
+/* ==========================================================================
+   Sections
+
+   No border, no radius, no shadow: a section is its title and the rule under
+   it. Everything below the rule is separated by margin alone.
+   ========================================================================== */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.panel-title {
+  font-family: var(--serif);
+  font-size: var(--t-lg);
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  line-height: 1.2;
+}
+
+.panel-sub {
+  margin-left: auto;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  text-align: right;
+}
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Buttons
+
+   Two shapes only: filled ink for the one primary action in view, and a
+   hairline outline for everything else. No gradient, no lift on hover, no
+   glow -- a button is a rectangle with a word in it.
+
+   The web offer is the second thing allowed to be filled, and it earns the
+   ink by exclusion: it appears only on an answer the library could not give,
+   in a section of its own, so it is never sitting beside the Ask button
+   competing with it for the same moment.
+   ========================================================================== */
+
+.button {
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 550;
+  padding: 8px 14px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.button-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.button-primary:hover:not(:disabled) {
+  /* The ink deepens rather than the button lifting. */
+  background: #000;
+  border-color: #000;
+}
+
+.button-quiet {
+  color: var(--ink-soft);
+  border-color: var(--rule);
+}
+
+.button-quiet:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+.button-danger {
+  color: var(--mark);
+  border-color: var(--mark);
+}
+
+.button-danger:hover:not(:disabled) {
+  background: var(--mark-wash);
+}
+
+.button-small {
+  font-size: var(--t-xs);
+  padding: 4px 9px;
+}
+
+/* On a dark ground the primary button inverts, so "filled" still means the
+   strongest thing on screen. */
+@media (prefers-color-scheme: dark) {
+  .button-primary {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--paper);
+  }
+
+  .button-primary:hover:not(:disabled) {
+    background: #fff;
+    border-color: #fff;
+  }
+}
+
+/* ==========================================================================
+   Ask
+   ========================================================================== */
+
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+/* The scope is a note in the margin, not a highlighted banner. */
+.scope {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.scope-name {
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ask-input {
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.5;
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  padding: var(--s4);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+.ask-input::placeholder {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.ask-input:disabled {
+  opacity: 0.6;
+}
+
+.ask-controls {
+  display: flex;
+  align-items: flex-end;
+  /* Wraps rather than squeezing: the point is that the Ask button is never
+     the thing that gets clipped when the pane is narrow. */
+  flex-wrap: wrap;
+  gap: var(--s4) var(--s5);
+}
+
+.slider {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.slider strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The native control, tinted. A hand-built track and thumb was pure ornament
+   on a slider nobody looks at twice. */
+.slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--mark);
+  cursor: pointer;
+}
+
+.slider input[type="range"]:disabled {
+  opacity: 0.5;
+}
+
+.ask-submit {
+  flex: 0 0 auto;
+  padding: 9px 34px;
+}
+
+.ask-hint {
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  max-width: var(--measure);
+}
+
+/* ==========================================================================
+   Answer
+   ========================================================================== */
+
+.answer-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.answer-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.answer-head .button {
+  margin-left: auto;
+}
+
+/* State is a word, set as text. There is no pill, no fill, no border. */
+.badge {
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+
+.badge-done {
+  color: var(--ok);
+}
+
+.badge-warn {
+  color: var(--warn);
+}
+
+.badge-context,
+.badge-partial {
+  color: var(--ink-faint);
+}
+
+/* The meta line: counts and timings, quiet, and never joined by a middot. */
+.answer-meta {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-meta > * + *::before {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 0.85em;
+  margin: 0 var(--s3);
+  vertical-align: -0.08em;
+  background: var(--rule);
+}
+
+/* The one place a serif is allowed a large setting: this is the answer. */
+.answer-text {
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.68;
+  max-width: var(--measure);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+.answer-refused .answer-text {
+  color: var(--ink-soft);
+}
+
+/* An equation is set the way the book sets one: on its own line, centred, in
+   the math face rather than the reading serif. KaTeX's own stylesheet handles
+   the centring and supplies the font -- what is added here is the scroll, so a
+   wide derivation moves sideways instead of forcing the column to. */
+.answer-math {
+  max-width: var(--measure);
+  color: var(--ink);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.answer-math .katex-display {
+  margin: 0.6em 0;
+}
+
+.answer-refused .answer-math {
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   The web offer
+
+   Drawn only when the library came back empty-handed, which is the one state
+   where the reader has nothing else to press. It is a rule and a sentence,
+   like everything else here -- the weight is in the button, not in a box
+   around it.
+   ========================================================================== */
+
+.search-offer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s3) var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--rule);
+}
+
+.search-offer-note {
+  flex: 1 1 18rem;
+  min-width: 0;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-width: var(--measure);
+}
+
+/* ==========================================================================
+   A web answer
+   ========================================================================== */
+
+/* The accent again, because this is the same fact the accent carries
+   everywhere else: where a thing came from. The one distinction a reader must
+   never have to work out is whether an answer is from their library or from
+   the open web. */
+.badge-web {
+  color: var(--mark);
+}
+
+.web-source-link {
+  color: var(--mark);
+  text-decoration: none;
+}
+
+.web-source-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The search engine's own summary of the page. Quiet, and clamped: it is
+   context for the title above it, not the source itself. */
+.web-snippet {
+  margin: var(--s1) 0 0;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--ink-faint);
+  max-width: var(--measure);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+/* ==========================================================================
+   Citation marks
+
+   The signature element. A marker is set the way a reference mark is set in a
+   book -- small, superscripted, in the accent colour -- rather than as a UI
+   chip with a background and a border.
+   ========================================================================== */
+
+.marker {
+  color: var(--mark);
+  font-family: var(--sans);
+  font-size: 0.8em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 0.15em;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.marker-inline {
+  cursor: default;
+}
+
+/* Hovering a mark in the answer tints it, and hovering a source row inks
+   that row's rule. At rest a mark is just oxblood type -- a reference number
+   in a margin is not highlighted in the book either. */
+.marker-inline:hover,
+.marker-strong:hover {
+  background: var(--mark-wash);
+}
+
+.marker-strong {
+  flex-shrink: 0;
+  font-size: var(--t-sm);
+  vertical-align: baseline;
+}
+
+/* ==========================================================================
+   Retrieved passages (shown when there is no written answer)
+   ========================================================================== */
+
+.context-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+.context-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding-left: var(--s4);
+  border-left: 2px solid var(--rule);
+  min-width: 0;
+}
+
+.context-head {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--mark);
+  overflow-wrap: anywhere;
+}
+
+.context-body {
+  font-family: var(--serif);
+  font-size: var(--t-base);
+  line-height: 1.6;
+  color: var(--ink-soft);
+  max-width: var(--measure);
+  white-space: pre-wrap;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+/* ==========================================================================
+   Sources
+
+   A catalogue, not a card list: each entry is a row under a hairline, with
+   the mark in its own column the way a margin holds a reference number.
+   ========================================================================== */
+
+.citations {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.citation {
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+  gap: var(--s1) var(--s3);
+  align-items: baseline;
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--rule-soft);
+  min-width: 0;
+}
+
+.citations > li:last-child {
+  border-bottom: none;
+}
+
+.citation-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.citation-source {
+  font-family: var(--serif);
+  font-size: var(--t-base);
+  overflow-wrap: anywhere;
+}
+
+.citation-body .muted {
+  font-size: var(--t-sm);
+}
+
+/* A reranker's scores only mean anything relative to each other within one
+   query, so the number is shown as a figure to compare down the column -- not
+   as a bar whose width implies a scale that does not exist. */
+.score {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Hovering a mark in the answer brings its row forward -- by inking the
+   rule, not by moving or tinting the row. */
+.citation-active {
+  border-bottom-color: var(--mark);
+}
+
+.citation-active .citation-source {
+  color: var(--mark);
+}
+
+/* ==========================================================================
+   Collection state
+   ========================================================================== */
+
+.stats-bar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s5);
+}
+
+.stats-bar-error {
+  gap: var(--s3);
+  align-items: flex-start;
+  line-height: 1.5;
+}
+
+.stats-bar-error strong {
+  color: var(--mark);
+}
+
+.stats-bar-error p {
+  margin-top: 2px;
+  font-size: var(--t-sm);
+}
+
+.stats-bar-error .dot {
+  margin-top: 6px;
+}
+
+.chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Sentence case, no letter-spacing, no uppercase: these are labels, and a
+   label shouted in caps is template chrome. */
+.chip-label {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+
+.chip-value {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  /* Shown in full or clipped, never truncated with an ellipsis mid-name: a
+     model id cut to "bge-small-en-v1.…" is worse than a wrapped one. */
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   Dropzone
+   ========================================================================== */
+
+.dropzone-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s5) var(--s4);
+  text-align: center;
+  cursor: pointer;
+  border: 1px dashed var(--rule);
+  border-radius: 2px;
+  background: transparent;
+}
+
+.dropzone:hover {
+  border-color: var(--ink-faint);
+  background: var(--surface);
+}
+
+.dropzone-active {
+  border-style: solid;
+  border-color: var(--mark);
+  background: var(--mark-wash);
+}
+
+.dropzone-busy {
+  opacity: 0.72;
+}
+
+.dropzone-icon {
+  width: 21px;
+  height: 21px;
+  color: var(--ink-faint);
+}
+
+.dropzone-active .dropzone-icon {
+  color: var(--mark);
+}
+
+.dropzone-title {
+  font-family: var(--serif);
+  font-size: var(--t-base);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* ==========================================================================
+   Notices
+   ========================================================================== */
+
+/* A rule in the margin, not a tinted box. */
+.notice {
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  padding-left: var(--s3);
+  border-left: 2px solid var(--rule);
+  color: var(--ink-soft);
+  max-width: var(--measure);
+  /* Error text can carry a long path or a type name with no spaces in it. */
+  overflow-wrap: anywhere;
+}
+
+.notice li + li {
+  margin-top: var(--s1);
+}
+
+.notice-warn {
+  border-left-color: var(--warn);
+  color: var(--warn);
+}
+
+.notice-danger {
+  border-left-color: var(--mark);
+  color: var(--mark);
+}
+
+/* ==========================================================================
+   Transfers in flight
+   ========================================================================== */
+
+.upload-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.upload-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  font-size: var(--t-sm);
+  min-width: 0;
+}
+
+.upload-name {
+  font-family: var(--serif);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.upload-head .muted {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Progress
+
+   A hairline that fills. No track pill, no gradient, no shimmer.
+   ========================================================================== */
+
+.bar {
+  height: 2px;
+  background: var(--rule);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--mark);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bar-fill {
+    transition: width 0.35s ease-out;
+  }
+}
+
+.bar-indeterminate .bar-fill {
+  width: 34%;
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(390%);
+  }
+}
+
+/* ==========================================================================
+   Job cards
+   ========================================================================== */
+
+.jobs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  min-width: 0;
+}
+
+.job {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* A job is marked by a rule in the margin, and state is carried by the word
+   in the header. Nothing fades or slides in. */
+.job-running {
+  padding-left: var(--s3);
+  border-left: 2px solid var(--warn);
+}
+
+.job-failed {
+  padding-left: var(--s3);
+  border-left: 2px solid var(--mark);
+}
+
+.job-cancelled {
+  padding-left: var(--s3);
+  border-left: 2px solid var(--rule);
+}
+
+.job-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s3);
+  min-width: 0;
+}
+
+.job-name {
+  font-family: var(--serif);
+  font-size: var(--t-base);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.job-head .badge {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.badge-queued,
+.badge-cancelled {
+  color: var(--ink-faint);
+}
+
+.badge-running {
+  color: var(--warn);
+}
+
+.badge-failed {
+  color: var(--mark);
+}
+
+.job-line {
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.job-failed .job-line {
+  color: var(--mark);
+}
+
+.job-foot {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-top: var(--s1);
+  min-height: 22px;
+}
+
+.job-foot .button {
+  margin-left: auto;
+}
+
+/* ==========================================================================
+   Pipeline trace
+
+   What the pipeline is doing, or did, one row per stage. Shared by the query
+   pane and by the parse of a document, because they are the same question --
+   "what is it working on and how long has that taken" -- asked of two
+   lifecycles.
+
+   A row is a name, what the stage said, and how long it held the run. The
+   left column is fixed so the names line up and the timings can be read down
+   as a column of figures, the way the citation scores are.
+   ========================================================================== */
+
+.trace {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--t-sm);
+}
+
+.trace-row {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr) auto;
+  gap: var(--s1) var(--s3);
+  align-items: baseline;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.trace-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.trace-stage {
+  font-size: var(--t-xs);
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+
+.trace-message {
+  min-width: 0;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.trace-time {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The stage in flight. Nothing animates: the clock in the right column is
+   already moving, and a second moving thing would only compete with it. */
+.trace-row-now .trace-stage,
+.trace-row-now .trace-message,
+.trace-row-now .trace-time {
+  color: var(--ink);
+}
+
+.trace-row-now .trace-stage {
+  font-weight: 600;
+}
+
+/* A stage the run has not reached. On a finished job these are not rendered at
+   all, so their presence always means "still to come". */
+.trace-row-ahead {
+  opacity: 0.45;
+}
+
+/* The rail's version: narrower columns, tighter rows, shorter words. */
+.trace-compact {
+  font-size: var(--t-xs);
+}
+
+.trace-compact .trace-row {
+  grid-template-columns: 3.8rem minmax(0, 1fr) auto;
+  gap: 0 var(--s2);
+  padding: 3px 0;
+}
+
+.trace-compact .trace-message {
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   Document list
+   ========================================================================== */
+
+.docs {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.docs > li {
+  min-width: 0;
+}
+
+.doc {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* The selected document is marked in the margin, in the accent -- the same
+   signal the citation marks use, because it is the same idea. */
+.doc-selected {
+  border-left: 2px solid var(--mark);
+  margin-left: calc(var(--s3) * -1);
+  padding-left: calc(var(--s3) - 2px);
+}
+
+.doc-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  padding: var(--s3) 0;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.doc-all {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+/* "All documents" is a button that fills its row, so it needs the row's own
+   padding rather than the wrapper div's. */
+li > .doc-all {
+  width: 100%;
+}
+
+.doc-name {
+  font-family: var(--serif);
+  font-size: var(--t-base);
+  overflow-wrap: anywhere;
+}
+
+.doc-selected .doc-name {
+  color: var(--mark);
+}
+
+.doc-main:hover .doc-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.doc-main .muted {
+  font-size: var(--t-sm);
+}
+
+.doc-confirm {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s1);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Empty state
+   ========================================================================== */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s7) 0 var(--s6);
+  max-width: var(--measure);
+}
+
+/* No plate, no tinted square: the glyph sits on the paper. */
+.empty-mark {
+  color: var(--ink-faint);
+  display: flex;
+}
+
+.empty-mark svg {
+  width: 26px;
+  height: 26px;
+}
+
+.empty h2 {
+  font-family: var(--serif);
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+.empty p {
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.62;
+  color: var(--ink-soft);
+}
+
+/* A numbered list, set as a list -- not three chips joined by middots. */
+.empty-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3) var(--s4);
+  margin-top: var(--s2);
+}
+
+.empty-steps li {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  padding-left: var(--s3);
+  border-left: 1px solid var(--rule);
+}
+
+.empty-steps li:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+
+/* ==========================================================================
+   Responsive: stack the panes on anything narrow
+   ========================================================================== */
+
+@media (max-width: 1000px) {
+  :root {
+    /* The shell stops being a fixed two-column measure here, so both the
+       centring calc and the pane cap are released together -- leaving either
+       one on would fight the single-column grid. */
+    --pane: 100%;
+    --shell: 100%;
+  }
+
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-bar {
+    flex-wrap: wrap;
+    gap: var(--s3);
+    padding: var(--s4) var(--s5) var(--s3);
+  }
+
+  .rail {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    padding: var(--s5) var(--s5) var(--s6);
+  }
+
+  .pane {
+    padding: var(--s6) var(--s5) var(--s7);
+  }
+}
+
+@media (max-width: 560px) {
+  .brand-text p {
+    display: none;
+  }
+
+  /* The mark column collapses onto the source line rather than squeezing the
+     passage into an unreadable strip. */
+  .citation {
+    grid-template-columns: 2rem minmax(0, 1fr);
+  }
+
+  .citation .score {
+    grid-column: 2;
+  }
+}
+
+/* ==========================================================================
+   Motion preferences
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* The indeterminate bar still has to say "working" without sweeping. */
+  .bar-indeterminate .bar-fill {
+    width: 100%;
+    transform: none;
+    opacity: 0.5;
+  }
+}

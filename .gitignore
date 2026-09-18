@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# Secrets -- never commit these. .env is where the API keys live; .env.example
+# is the tracked template and is deliberately re-included at the bottom.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# ---------------------------------------------------------------------------
+# Local data -- the vector store, the embedding cache, and any corpus dropped
+# into data/. All of it is machine-local, large, regenerable, and frequently
+# copyrighted; none of it belongs in history.
+# ---------------------------------------------------------------------------
+data/
+qdrant_db/
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------------------------------------------------------------------------
+# Byte-compiled files and build artifacts
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+build/
+dist/
+wheels/
+sdist/
+*.egg-info/
+*.egg
+.eggs/
+
+# ---------------------------------------------------------------------------
+# Virtual environments. .venv is the one this project uses; the rest are here
+# because a stray `python -m venv env` creates a directory that is otherwise
+# easy to commit by accident.
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------------------
+# Test, type-check and lint caches
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+coverage.xml
+.coverage
+.coverage.*
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Model and framework caches (in case a cache dir is ever pointed at the repo)
+# ---------------------------------------------------------------------------
+.cache/
+hf_cache/
+.transformers_cache/
+*.onnx
+*.gguf
+*.safetensors
+
+# ---------------------------------------------------------------------------
+# Editors and IDEs
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ---------------------------------------------------------------------------
+# Operating system noise
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Runtime artifacts
+# ---------------------------------------------------------------------------
+*.log
+logs/
+*.tmp
+*.bak
+*.orig
+*.rej
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Everything above is machine-local. Two files that look generated are NOT,
+# and are deliberately left untracked-by-nothing so they stay in history:
+#
+#   uv.lock         -- the resolved dependency set. This is an application, so
+#                      the lockfile is what makes an install reproducible;
+#                      ignoring it would let two machines resolve different
+#                      LangChain versions against the same source.
+#   .python-version -- pins the interpreter uv installs and the lockfile was
+#                      resolved against.
+# ---------------------------------------------------------------------------
