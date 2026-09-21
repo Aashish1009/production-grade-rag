@@ -1,18 +1,32 @@
 """Unit tests for the generation stage's pure pieces.
 
-Only ``format_context``, the response normaliser and the disabled-generation
-path are covered -- everything here runs without an API key, a network call or
-a model download.
+Only the context renderers (corpus and web), the response normaliser and the
+disabled-generation path are covered -- everything here runs without an API
+key, a network call or a model download. Where the real pipeline builds a chat
+client, the test replaces it with one that records what it was asked.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from langchain_core.documents import Document
 
 from rag.config import Settings
-from rag.generation import _SYSTEM_PROMPT, _as_text, build_chat_model, format_context, generate_answer
-from rag.state import MetadataKeys as MK
+from rag.generation import (
+    _SYSTEM_PROMPT,
+    _WEB_SYSTEM_PROMPT,
+    _as_text,
+    _share_char_budget,
+    build_chat_model,
+    format_context,
+    format_web_context,
+    generate_answer,
+    generate_web_answer,
+)
+from rag.state import MetadataKeys as MK, WebPage
 
 
 def _chunk(text: str, **meta: object) -> Document:
@@ -247,3 +261,262 @@ def test_generate_answer_with_no_documents(no_generation: Settings) -> None:
 def test_build_chat_model_without_a_key_raises(no_generation: Settings) -> None:
     with pytest.raises(RuntimeError, match="no API key"):
         build_chat_model(no_generation)
+
+
+# ---------------------------------------------------------------------------
+# the web context budget -- the fix for a request that never reached a model
+# ---------------------------------------------------------------------------
+
+# Chosen as the filler for pages under test because neither character occurs
+# in any of the titles, urls or snippets below: a page's kept text can then be
+# counted out of the rendered context exactly.
+_SHORT_FILLER = "z"
+_LONG_FILLER = "q"
+
+
+def _page(text: str, **over: object) -> WebPage:
+    """A fetched page whose ``text`` is what the budget is spent on."""
+    fields: dict[str, object] = {
+        "title": "The Bradley-Terry model",
+        "url": "https://example.org/bt",
+        "snippet": "A probability model for paired comparisons.",
+        "text": text,
+    }
+    fields.update(over)
+    return WebPage(**fields)  # type: ignore[arg-type]
+
+
+def _generating(**over: object) -> Settings:
+    """Settings with generation on, so both answer paths run past the guard."""
+    return _settings(enable_generation=True, **over)
+
+
+class _RecordingChat:
+    """A chat client that records the messages it was handed.
+
+    Stands in for the LiteLLM fallback chain: these tests are about the size
+    of the request the stage builds, which is decided before any provider is
+    contacted, so nothing here is a model or a network call.
+    """
+
+    def __init__(self, reply: str = "Answer [1].") -> None:
+        self.reply = reply
+        self.calls: list[Any] = []
+
+    def invoke(self, messages: Any) -> SimpleNamespace:
+        self.calls.append(messages)
+        return SimpleNamespace(content=self.reply)
+
+
+def _capture_build(chat: _RecordingChat) -> tuple[Any, dict[str, Any]]:
+    """A stand-in for ``build_chat_model`` that records its keyword arguments."""
+    seen: dict[str, Any] = {}
+
+    def _build(settings: Settings | None = None, *, max_tokens: int | None = None) -> Any:
+        seen["max_tokens"] = max_tokens
+        return chat
+
+    return _build, seen
+
+
+def test_web_page_texts_are_trimmed_to_the_context_budget() -> None:
+    # Five pages at the per-page ceiling is 30,000 characters -- ~7,674 tokens
+    # by the provider's own count, which with the declared output reservation
+    # went over the free tier's 8,000-token-per-minute limit and failed every
+    # web answer before a model was called.
+    pages = [_page(_LONG_FILLER * 6000) for _ in range(5)]
+
+    context, _ = format_web_context(pages, _settings(web_max_context_chars=16000))
+
+    assert context.count(_LONG_FILLER) == 16000
+
+
+def test_the_budget_is_shared_out_rather_than_spent_in_page_order() -> None:
+    # Every page here is also a source the reader is shown. A context that let
+    # the first two pages take everything would have the answer citing a list
+    # of sources it was never given the text of.
+    pages = [_page(_LONG_FILLER * 6000) for _ in range(5)]
+
+    context, sources = format_web_context(pages, _settings(web_max_context_chars=16000))
+
+    assert len(sources) == 5
+    # Each page keeps its own 3,200-character share. Spending in order would
+    # have left pages 3 to 5 with a header and no text at all.
+    assert context.count(_LONG_FILLER * 3200) == 5
+
+
+def test_a_short_page_passes_its_unused_share_to_a_long_one() -> None:
+    # Share is 500 characters each. The short page uses 100 and its spare 400
+    # go to the long one, so the budget is spent on pages that have something
+    # to spend it on rather than on the accident of their order.
+    short = _page(_SHORT_FILLER * 100)
+    long = _page(_LONG_FILLER * 10000)
+
+    context, _ = format_web_context([short, long], _settings(web_max_context_chars=1000))
+
+    assert context.count(_SHORT_FILLER) == 100
+    assert context.count(_LONG_FILLER) == 900
+
+
+def test_the_share_a_page_gets_does_not_depend_on_where_it_was_ranked() -> None:
+    # The same two pages in the other order must keep the same amounts: a
+    # budget that favoured whichever page the search engine happened to list
+    # first would make the citation depth a property of the search ranking.
+    short = _page(_SHORT_FILLER * 100)
+    long = _page(_LONG_FILLER * 10000)
+
+    context, _ = format_web_context([long, short], _settings(web_max_context_chars=1000))
+
+    assert context.count(_SHORT_FILLER) == 100
+    assert context.count(_LONG_FILLER) == 900
+
+
+def test_trimming_keeps_the_top_of_a_page_rather_than_sampling_it() -> None:
+    # Pages are cut, not excerpted. A summary sampled from the middle of a
+    # page would drop the opening paragraph, which is where a page usually
+    # says what it is about.
+    pages = [_page("heading" + _LONG_FILLER * 10000) for _ in range(2)]
+
+    context, _ = format_web_context(pages, _settings(web_max_context_chars=1000))
+
+    assert context.count("heading") == 2
+
+
+def test_every_page_keeps_its_marker_url_and_delimiters_under_a_tight_budget() -> None:
+    # The markers are what the citations mean and the delimiters are what the
+    # prompt's "everything between these is quoted" claim rests on, so
+    # trimming may remove page text but never a page.
+    pages = [
+        _page(
+            _LONG_FILLER * 6000,
+            title=f"Page {n}",
+            url=f"https://example.org/{n}",
+        )
+        for n in range(1, 6)
+    ]
+
+    context, sources = format_web_context(pages, _settings(web_max_context_chars=2000))
+
+    for n in range(1, 6):
+        assert f"[{n}] Page {n}" in context
+        assert f"https://example.org/{n}" in context
+        assert f"<<<BEGIN WEB PAGE {n}>>>" in context
+        assert f"<<<END WEB PAGE {n}>>>" in context
+    assert [s["marker"] for s in sources] == ["[1]", "[2]", "[3]", "[4]", "[5]"]
+
+
+def test_a_page_that_was_never_read_still_gets_its_block() -> None:
+    # The keyless path can return a page whose body would not load, leaving
+    # only the search engine's snippet. Dropping that block would renumber
+    # every citation after it.
+    pages = [
+        _page(_LONG_FILLER * 100),
+        _page("", snippet="Only a summary here."),
+        _page(_LONG_FILLER * 100),
+    ]
+
+    context, sources = format_web_context(pages, _settings(web_max_context_chars=1000))
+
+    assert "[2] " in context
+    assert sources[1]["snippet"] == "Only a summary here."
+
+
+def test_the_source_map_is_not_trimmed_along_with_the_text() -> None:
+    # The budget bounds what the model reads, not what the reader is shown:
+    # the urls and snippets are the citation, and are what is left to display
+    # when generation fails outright.
+    pages = [_page(_LONG_FILLER * 6000, title=f"Page {n}") for n in range(1, 6)]
+
+    _, sources = format_web_context(pages, _settings(web_max_context_chars=2000))
+
+    assert [s["title"] for s in sources] == [f"Page {n}" for n in range(1, 6)]
+    assert all(s["url"] for s in sources)
+
+
+def test_the_char_budget_helper_leaves_text_it_can_afford() -> None:
+    assert _share_char_budget([], 500) == []
+    assert _share_char_budget(["short"], 500) == ["short"]
+
+
+def test_a_zero_budget_empties_every_page_rather_than_erroring() -> None:
+    # ``web_max_context_chars`` is validated to be greater than zero, so this
+    # is the helper's own contract rather than a reachable configuration --
+    # but it must not divide by zero or quietly hand back whole pages.
+    assert _share_char_budget(["a" * 100, "b" * 100], 0) == ["", ""]
+
+
+def test_the_default_web_context_cannot_overshoot_the_free_tier_ceiling() -> None:
+    """The constraint the web path failed on, asserted as arithmetic.
+
+    Groq charges the *declared* ``max_tokens`` against the per-minute limit
+    whether or not the model uses it, so the request that has to fit is
+    context + reserved output + prompts. The observed failure was
+    "Limit 8000, Requested 8698" for five 6,000-character pages, and no
+    fallback model could have rescued it: the whole chain sits under the same
+    ceiling, which is why trimming is the only fix. Characters per token is
+    taken as 3.5 rather than the 4 English tends to average, so this estimate
+    errs high.
+    """
+    settings = _settings()
+
+    request = (
+        settings.web_max_context_chars / 3.5
+        + len(_WEB_SYSTEM_PROMPT) / 3.5
+        + settings.web_llm_max_tokens
+    )
+
+    assert request < 8000
+    # And the old shape of the bug stays out. Five pages at the per-page
+    # ceiling is more context than one request can carry, so the per-page
+    # ceiling must never be the number that bounds a request -- that is what
+    # web_max_context_chars exists for.
+    overhead = 6000 * 5 / 3.5 + settings.web_llm_max_tokens
+    assert overhead > 8000
+
+
+def test_generate_web_answer_reserves_the_smaller_output_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The reservation is part of the request size on a metered plan, and a
+    # summary of fetched pages is not a long answer. Leaving the corpus path's
+    # 1,024 in place here spends budget the answer never gets back.
+    chat = _RecordingChat()
+    build, seen = _capture_build(chat)
+    monkeypatch.setattr("rag.generation.build_chat_model", build)
+
+    answer, sources, context = generate_web_answer(
+        "what is Bradley-Terry", [_page(_LONG_FILLER * 20)], _generating(web_llm_max_tokens=384)
+    )
+
+    assert seen["max_tokens"] == 384
+    assert answer == "Answer [1]."
+    assert sources and context
+    assert chat.calls, "the web answer path never reached a model"
+
+
+def test_generate_answer_leaves_the_output_budget_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ``None`` means "whatever llm_max_tokens says". A corpus answer may be
+    # quoting passages at length and is not the path being trimmed.
+    chat = _RecordingChat()
+    build, seen = _capture_build(chat)
+    monkeypatch.setattr("rag.generation.build_chat_model", build)
+    docs = [_chunk("Some grounded text.", **{MK.SOURCE_NAME: "book.pdf"})]
+
+    answer, _, _ = generate_answer("q", docs, _generating())
+
+    assert seen["max_tokens"] is None
+    assert answer == "Answer [1]."
+
+
+def test_web_answer_with_no_generation_returns_the_pages(no_generation: Settings) -> None:
+    # Same graceful degradation as the corpus path: the pages are still worth
+    # showing, and the source map is what renders them.
+    pages = [_page(_LONG_FILLER * 20)]
+
+    answer, sources, context = generate_web_answer("q", pages, no_generation)
+
+    assert answer is None
+    assert [s["marker"] for s in sources] == ["[1]"]
+    assert context == format_web_context(pages, no_generation)[0]

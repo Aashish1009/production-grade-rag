@@ -291,6 +291,19 @@ class DeleteResponse(BaseModel):
     deleted_chunks: int
 
 
+class WarmResponse(BaseModel):
+    """What is resident after a warm-up request.
+
+    ``loaded`` is a list of names rather than a bare boolean so the trace and
+    the logs say *which* model was rebuilt: a partial warm-up (one model
+    loaded, one failed) is a different problem from a cold start, and a
+    boolean would report both as "not warm yet".
+    """
+
+    loaded: list[str] = Field(default_factory=list)
+    models_loaded: bool = False
+
+
 class StatsResponse(BaseModel):
     """Collection and model state, for the status bar.
 
@@ -306,6 +319,16 @@ class StatsResponse(BaseModel):
     sparse_model: str
     reranker_model: str
     device: str
+    models_loaded: bool = Field(
+        default=False,
+        description=(
+            "Whether the models are in memory right now. False means the next "
+            "question pays a one-time model load of roughly 90 seconds, which "
+            "is what the UI reports instead of appearing to hang -- and why "
+            "it starts the load on page open, so the wait overlaps the "
+            "visitor reading or uploading. See rag/model_lifecycle.py."
+        ),
+    )
     retrieval_mode: str
     fetch_k: int
     top_k: int

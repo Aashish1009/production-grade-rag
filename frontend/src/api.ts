@@ -13,6 +13,7 @@ import type {
   StageEvent,
   Stats,
   StreamEvent,
+  WarmResponse,
   WebAskResponse,
 } from './types'
 
@@ -60,6 +61,22 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 export const getStats = (): Promise<Stats> => request<Stats>('/stats')
+
+/**
+ * Start loading the models, and settle when they are resident.
+ *
+ * The server drops the models after a spell of no use and rebuilds them on
+ * demand, so the first visitor after a quiet period would otherwise wait out
+ * the whole ~90 second load inside their first question. Called when the page
+ * opens instead, so the load overlaps reading or uploading -- and it takes as
+ * long as it takes: this request deliberately has no timeout of its own, and
+ * the caller shows a notice rather than a spinner for the duration.
+ *
+ * Safe to call on a warm server: the load is idempotent and returns what is
+ * already resident.
+ */
+export const warmModels = (): Promise<WarmResponse> =>
+  request<WarmResponse>('/warm', { method: 'POST' })
 
 export const listJobs = (): Promise<Job[]> => request<Job[]>('/jobs')
 

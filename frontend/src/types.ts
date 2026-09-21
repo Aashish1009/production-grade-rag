@@ -165,6 +165,10 @@ export interface Stats {
   sparse_model: string
   reranker_model: string
   device: string
+  /** Whether the models are in memory right now. False means the next question
+   *  pays a one-time load of roughly 90 seconds, which is what the loading
+   *  notice reports rather than appearing to hang. */
+  models_loaded: boolean
   retrieval_mode: string
   fetch_k: number
   top_k: number
@@ -175,4 +179,12 @@ export interface Stats {
    *  the UI can say why the search offer never appears rather than leaving the
    *  user to guess. */
   web_search_provider: string | null
+}
+
+/** What is resident after a warm-up request. */
+export interface WarmResponse {
+  /** Named rather than a boolean so a partial load (one model up, one failed)
+   *  is visible as itself instead of reported as "not warm yet". */
+  loaded: string[]
+  models_loaded: boolean
 }

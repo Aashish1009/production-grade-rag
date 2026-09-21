@@ -22,6 +22,25 @@ qdrant_db/
 *.db
 
 # ---------------------------------------------------------------------------
+# Deployment kit -- machine-specific, and deliberately untracked.
+#
+# DEPLOY.md at the repo root IS tracked: it explains how this app is published
+# and what the constraints are, which is useful to anyone reading the repo.
+# What lives in deploy/ is the operational half and is not:
+#
+#   run-rag.ps1           hardcodes Windows paths and a Tailscale install
+#                         location; it supervises the app on one machine.
+#   tailscale-policy.json a raw dump of one tailnet's access policy. It holds
+#                         no secrets, but DEPLOY.md already reproduces the one
+#                         block that matters, in context and with a reason.
+#   logs/                 runtime output.
+#
+# Neither tells a reader anything DEPLOY.md does not say better, so tracking
+# them would only add noise and expose a private network's configuration.
+# ---------------------------------------------------------------------------
+deploy/
+
+# ---------------------------------------------------------------------------
 # Byte-compiled files and build artifacts
 # ---------------------------------------------------------------------------
 __pycache__/

@@ -32,6 +32,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 from rag.config import Settings, get_settings
 from rag.logging_utils import get_logger, timed
+from rag.model_lifecycle import EMBEDDER_BUILD_LOCK, use
 
 logger = get_logger(__name__)
 
@@ -65,14 +66,23 @@ class CachedHuggingFaceEmbeddings(Embeddings):
 
         Lazy so that ``GET /api/stats`` -- which reports the model *name*
         without needing it -- never triggers a multi-GB download.
+
+        The build is serialised and re-checked under
+        :data:`~rag.model_lifecycle.EMBEDDER_BUILD_LOCK`. Two callers can
+        arrive together -- the warm-up the UI starts on page open and the first
+        embed of an upload made from that same page -- and both would find
+        ``_model`` empty, leaving two copies of the weights in memory for as
+        long as the loser takes to be collected.
         """
         if self._model is None:
-            with timed(logger, f"Loading dense model {self.settings.dense_model}"):
-                self._model = HuggingFaceEmbeddings(
-                    model_name=self.settings.dense_model,
-                    model_kwargs={"device": self.settings.resolved_device},
-                    encode_kwargs={"normalize_embeddings": True},
-                )
+            with EMBEDDER_BUILD_LOCK:
+                if self._model is None:
+                    with timed(logger, f"Loading dense model {self.settings.dense_model}"):
+                        self._model = HuggingFaceEmbeddings(
+                            model_name=self.settings.dense_model,
+                            model_kwargs={"device": self.settings.resolved_device},
+                            encode_kwargs={"normalize_embeddings": True},
+                        )
         return self._model
 
     # -- cache helpers -------------------------------------------------------
@@ -122,7 +132,16 @@ class CachedHuggingFaceEmbeddings(Embeddings):
     # -- Embeddings interface --------------------------------------------------
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Embed a batch of documents, serving cached texts from disk."""
+        """Embed a batch of documents, serving cached texts from disk.
+
+        The call is held open with :func:`~rag.model_lifecycle.use` for its
+        whole duration, so the idle reaper cannot drop the model out from under
+        a batch that is already running.
+        """
+        with use():
+            return self._embed_documents(texts)
+
+    def _embed_documents(self, texts: list[str]) -> list[list[float]]:
         results: list[list[float] | None] = [None] * len(texts)
         to_embed: list[int] = []
 
@@ -155,7 +174,16 @@ class CachedHuggingFaceEmbeddings(Embeddings):
         return [result for result in results if result is not None]
 
     def embed_query(self, text: str) -> list[float]:
-        """Embed a single query, cached like documents."""
+        """Embed a single query, cached like documents.
+
+        Guarded like :meth:`embed_documents`: this is the call a query makes
+        first, so it is also the call most likely to be the one that loads the
+        model after an idle release.
+        """
+        with use():
+            return self._embed_query(text)
+
+    def _embed_query(self, text: str) -> list[float]:
         key = self._key(text)
         cached = self._load(key)
         if cached is not None:
@@ -191,6 +219,43 @@ def get_dense_embeddings(settings: Settings | None = None) -> CachedHuggingFaceE
     if _DENSE_EMBEDDINGS is None:
         _DENSE_EMBEDDINGS = CachedHuggingFaceEmbeddings(settings)
     return _DENSE_EMBEDDINGS
+
+
+# ---------------------------------------------------------------------------
+# Idle release
+# ---------------------------------------------------------------------------
+
+
+def release_dense_embeddings() -> bool:
+    """Drop the loaded weights; ``True`` if there were any to drop.
+
+    Only the model is cleared -- the ``CachedHuggingFaceEmbeddings`` instance
+    stays, and so does the module-level singleton. That is deliberate on both
+    counts:
+
+    * Clearing ``_model`` frees the ``SentenceTransformer`` and its torch
+      tensors even if something else still holds the embedder object (a
+      ``QdrantVectorStore`` built during the call that just finished, say).
+      Dropping the singleton instead would leave that stale reference holding
+      the weights while a new singleton built a second copy.
+    * The instance carries the cache hit/miss counters and the cache directory.
+      Keeping it means "the model was evicted" and "the cache was thrown away"
+      stay separate facts -- re-ingesting after an eviction still hits the disk
+      cache rather than re-embedding a corpus.
+
+    Idempotent: calling it twice, or on a process that never loaded a model,
+    is a no-op returning ``False``.
+    """
+    instance = _DENSE_EMBEDDINGS
+    if instance is None or instance._model is None:
+        return False
+    instance._model = None
+    return True
+
+
+def dense_model_loaded() -> bool:
+    """Whether the dense model's weights are currently resident."""
+    return _DENSE_EMBEDDINGS is not None and _DENSE_EMBEDDINGS._model is not None
 
 
 # ---------------------------------------------------------------------------

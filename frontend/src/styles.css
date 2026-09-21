@@ -1391,6 +1391,75 @@ li > .doc-all {
 }
 
 /* ==========================================================================
+   Model loading
+
+   The one wait this app asks for, and the loudest thing on the page -- which
+   is deliberate, and the only place that is true. A visitor who lands while
+   the models are being read back in has been taught by every other web app
+   what a stalled page looks like, so the band has to be unmistakable: the
+   accent rule, the wash, and a heading at the size of a section title rather
+   than a status line.
+
+   It spans the shell instead of sitting in either column because the state of
+   the machine belongs to neither. Its inset is the rail's own, so the heading
+   lands on the same optical line as "Library" below it.
+   ========================================================================== */
+
+.warmup {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, auto);
+  align-items: center;
+  gap: var(--s4) var(--s6);
+  padding: var(--s5) var(--s6);
+  margin-bottom: var(--s5);
+  border-left: 3px solid var(--mark);
+  background: var(--mark-wash);
+}
+
+.warmup-title {
+  font-family: var(--serif);
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+}
+
+.warmup-text {
+  margin-top: var(--s2);
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.6;
+  color: var(--ink-soft);
+  /* Narrower than --measure. The reading column is set for prose alone;
+     this one shares its row with the clock, and a 66ch line beside a meter
+     leaves the meter stranded at the far right. */
+  max-width: 54ch;
+}
+
+.warmup-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.warmup-clock {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The failure is not an error: the app answers the next question either way,
+   so it is stated once in the margin and left there. */
+.warmup-note {
+  grid-column: 1 / -1;
+  max-width: var(--measure);
+  margin-bottom: var(--s4);
+}
+
+/* ==========================================================================
    Responsive: stack the panes on anything narrow
    ========================================================================== */
 
@@ -1422,11 +1491,67 @@ li > .doc-all {
   .pane {
     padding: var(--s6) var(--s5) var(--s7);
   }
+
+  /* Below 1000px the whole shell is one column, so the band has to take the
+     rail's own inset -- otherwise its heading sits 8px right of every section
+     title under it. */
+  .warmup {
+    padding: var(--s5) var(--s5);
+  }
+}
+
+/* One column, so the band's meter goes under its text rather than beside it. */
+@media (max-width: 760px) {
+  .warmup {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .warmup-clock {
+    text-align: left;
+  }
 }
 
 @media (max-width: 560px) {
+  /* The 24px gutters the desktop shell is set with are a seventh of a phone's
+     width. Everything that carries one steps down to the 16px step together,
+     so the rail, the pane and the band keep landing on the same line. */
+  .app-bar {
+    padding: var(--s3) var(--s4) var(--s3);
+  }
+
+  .rail {
+    padding: var(--s4) var(--s4) var(--s5);
+  }
+
+  .pane {
+    padding: var(--s5) var(--s4) var(--s6);
+  }
+
+  .warmup {
+    padding: var(--s4);
+    /* Three columns of chrome around the reading column is a line's worth of
+       text lost per line. */
+    border-left-width: 2px;
+  }
+
+  /* A masthead that wraps onto three lines eats the top of the viewport it is
+     pinned to. */
+  .brand-text h1 {
+    font-size: var(--t-lg);
+  }
+
   .brand-text p {
     display: none;
+  }
+
+  .panel-title {
+    font-size: var(--t-base);
+  }
+
+  /* Fifty pixels of breathing room above the empty state is a fifth of the
+     screen the visitor has to scroll past to reach the upload box. */
+  .empty {
+    padding: var(--s5) 0 var(--s4);
   }
 
   /* The mark column collapses onto the source line rather than squeezing the
@@ -1437,6 +1562,47 @@ li > .doc-all {
 
   .citation .score {
     grid-column: 2;
+  }
+
+  /* Named stages are one word each; 6rem of column is desktop air. */
+  .trace-row {
+    grid-template-columns: 4.6rem minmax(0, 1fr) auto;
+  }
+}
+
+/* ==========================================================================
+   Pointer, not width
+
+   A touch target must be big enough for a fingertip, and that is a fact about
+   the pointer rather than the viewport: a 1366px laptop with a touchscreen
+   needs this as much as a phone does, and a narrow desktop window does not.
+   The baseline is 44px, which is the smallest size either mobile platform's
+   own guidance allows.
+   ========================================================================== */
+
+@media (pointer: coarse) {
+  .button {
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  .button-small {
+    /* The small variant is for dense rows -- a document's Delete, a job's
+       Cancel. It stays visually small and grows only its hit area, so the row
+       does not become a ladder of bars. */
+    min-height: 44px;
+    padding: 4px 12px;
+  }
+
+  .slider input[type="range"] {
+    height: 44px;
+  }
+
+  /* Tap feedback, since there is no hover on a touchscreen to confirm the
+     press landed. */
+  .button:active:not(:disabled),
+  .doc-main:active {
+    opacity: 0.6;
   }
 }
 

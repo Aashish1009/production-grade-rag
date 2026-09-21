@@ -178,13 +178,22 @@ def describe_model(settings: Settings | None = None) -> str:
     return "no model configured"
 
 
-def build_chat_model(settings: Settings | None = None) -> Runnable:
+def build_chat_model(
+    settings: Settings | None = None, *, max_tokens: int | None = None
+) -> Runnable:
     """ChatLiteLLM chain with model fallbacks, per ``resolved_llm_provider``.
 
     The fallback chain is LangChain's ``with_fallbacks`` over one
     ``ChatLiteLLM`` runnable per configured model. Each level adds its own
     bounded retries and timeout, so a dead model costs at most a few seconds
     before the next one takes over.
+
+    ``max_tokens`` overrides the output reservation for one path, defaulting to
+    ``llm_max_tokens``. It is a parameter rather than a constant because the
+    reservation is not free on a metered plan: a provider that counts the
+    declared ceiling against your rate limit charges for it whether or not it
+    is used, so the short-answer web path buys back budget by declaring less
+    (see ``web_llm_max_tokens``).
     """
     from langchain_litellm import ChatLiteLLM
 
@@ -204,12 +213,14 @@ def build_chat_model(settings: Settings | None = None) -> Runnable:
             *[(m, settings.groq_api_key) for m in settings.groq_fallback_models],
         ]
 
+    budget = settings.llm_max_tokens if max_tokens is None else max_tokens
+
     def _chat(model: str, api_key: str | None) -> BaseChatModel:
         return ChatLiteLLM(
             model=model,
             api_key=api_key,
             temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
+            max_tokens=budget,
             request_timeout=settings.llm_timeout_seconds,
             max_retries=settings.llm_max_retries,
         )
@@ -438,7 +449,42 @@ _PAGE_OPEN = "<<<BEGIN WEB PAGE {n}>>>"
 _PAGE_CLOSE = "<<<END WEB PAGE {n}>>>"
 
 
-def format_web_context(pages: list[WebPage]) -> tuple[str, list[dict[str, Any]]]:
+def _share_char_budget(texts: list[str], budget: int) -> list[str]:
+    """Trim page texts so that together they fit ``budget`` characters.
+
+    The budget is shared out rather than spent in order, because every page
+    here is also a *source the reader is shown*. A context that let the first
+    two pages take everything would have the answer citing a list of sources
+    it was never given -- so each page keeps an equal share of what is
+    available, and pages too short to use their share pass the remainder on to
+    the ones that were cut. That way the budget is spent on the pages that
+    have something to spend it on, rather than on the accident of their order.
+    """
+    if not texts:
+        return []
+    if budget <= 0:
+        return ["" for _ in texts]
+
+    share = budget // len(texts)
+    kept = [min(len(text), share) for text in texts]
+
+    slack = budget - sum(kept)
+    if slack > 0:
+        for i, text in enumerate(texts):
+            if kept[i] >= len(text):
+                continue
+            take = min(len(text) - kept[i], slack)
+            kept[i] += take
+            slack -= take
+            if slack <= 0:
+                break
+
+    return [text[:count] for text, count in zip(texts, kept)]
+
+
+def format_web_context(
+    pages: list[WebPage], settings: Settings | None = None
+) -> tuple[str, list[dict[str, Any]]]:
     """Render fetched pages into a numbered context block + source map.
 
     The web counterpart of :func:`format_context`, and deliberately the same
@@ -447,15 +493,27 @@ def format_web_context(pages: list[WebPage]) -> tuple[str, list[dict[str, Any]]]
     That is what lets one output battery cover both paths -- and what keeps
     ``CitationGuardrail`` from having to be told which kind of source it is
     looking at.
+
+    The texts are trimmed together to ``web_max_context_chars`` before they go
+    in. That is not a tidiness measure: on a free tier the request has to fit
+    an 8,000-token-per-minute ceiling *including the declared output*, so an
+    unbounded context does not produce a slower answer, it produces no answer
+    at all -- and the provider rejects it in a way that reads like a broken
+    model rather than an oversized request.
     """
+    settings = settings or get_settings()
+    texts = _share_char_budget(
+        [page.text for page in pages], settings.web_max_context_chars
+    )
+
     blocks: list[str] = []
     sources: list[dict[str, Any]] = []
 
-    for i, page in enumerate(pages, start=1):
+    for i, (page, text) in enumerate(zip(pages, texts), start=1):
         marker = f"[{i}]"
         blocks.append(
             f"{marker} {page.title}\n{page.url}\n"
-            f"{_PAGE_OPEN.format(n=i)}\n{page.text}\n{_PAGE_CLOSE.format(n=i)}"
+            f"{_PAGE_OPEN.format(n=i)}\n{text}\n{_PAGE_CLOSE.format(n=i)}"
         )
         sources.append(
             {
@@ -482,13 +540,17 @@ def generate_web_answer(
     to show.
     """
     settings = settings or get_settings()
-    context, sources = format_web_context(pages)
+    context, sources = format_web_context(pages, settings)
 
     if not settings.enable_generation:
         return None, sources, context
 
     try:
-        chat = build_chat_model(settings)
+        # A smaller output reservation than the corpus path, deliberately: the
+        # provider counts the declared ceiling against the per-minute token
+        # limit, and this answer is a summary of pages rather than a long
+        # quotation of them.
+        chat = build_chat_model(settings, max_tokens=settings.web_llm_max_tokens)
         response = chat.invoke(
             [
                 ("system", _WEB_SYSTEM_PROMPT),
