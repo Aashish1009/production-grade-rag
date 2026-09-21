@@ -218,7 +218,8 @@ plain JSON and usable with `curl`.
 | `POST /ask` | `{question, top_k?, filters?}` → `{answer, citations, context, refused}`. |
 | `GET /documents` | Indexed documents: id, name, chunk count, page span, complete flag. |
 | `DELETE /documents/{id}` | Drop every chunk of one document, and its uploaded file. |
-| `GET /stats` | Collection size, models, device, generation state. |
+| `GET /stats` | Collection size, models, device, generation state, `models_loaded`. |
+| `POST /warm` | Load the models and return what is resident. Idempotent; blocks for the load. |
 | `GET /config` | Every effective setting, secrets excluded. |
 
 ```powershell
@@ -307,13 +308,45 @@ Every tunable is an environment variable (prefix `RAG_`) or an entry in
 | `RAG_ENABLE_NEIGHBOUR_EXPANSION` | `false` | pull prev/next chunks of each hit |
 | `RAG_ENABLE_GENERATION` | `false` | turn on the LLM answer stage |
 | `RAG_GROQ_MODEL` | `groq/openai/gpt-oss-120b` | primary generation model |
-| `RAG_GROQ_FALLBACK_MODELS` | gpt-oss-20b, qwen3.6-27b | tried in order on failure |
+| `RAG_GROQ_FALLBACK_MODELS` | gpt-oss-20b, qwen3.8-27b | tried in order on failure |
 | `RAG_LLM_MAX_TOKENS` | `1024` | cap on the generated answer |
+| `RAG_WEB_MAX_CONTEXT_CHARS` | `16000` | characters of fetched page text per web request |
+| `RAG_WEB_LLM_MAX_TOKENS` | `512` | output reservation for a web answer |
+| `RAG_MODEL_IDLE_UNLOAD_MINUTES` | `10` | drop the models after this long unused; `0` keeps them resident |
 | `RAG_LOG_LEVEL` | `INFO` | console logging; `DEBUG` names which guardrail fired |
 
 > `RAG_API_HOST` binds loopback by default, and that default is load-bearing:
 > the server has no authentication and can read *and delete* the index.
 > Binding it to a public interface is an explicit decision.
+
+### The models are not resident all the time
+
+The dense embedder and the cross-encoder are ~229MB of committed memory between
+them, and for a long time nothing released it: the models were loaded on the
+first query and stayed for the life of the process. On an 8GB laptop serving an
+idle link that is nearly all waste, so they are now dropped after
+`RAG_MODEL_IDLE_UNLOAD_MINUTES` with no use and rebuilt on demand.
+
+Be precise about what that buys, because the tempting headline is wrong: the
+process's ~1GB of *imports* (torch, sentence-transformers) is a floor no release
+can return, so dropping the models takes a live server from 1,280MB of committed
+private memory to 1,051MB — not to zero. What it removes is the standing cost of
+weights nobody is asking questions with.
+
+The rebuild is the cost a cold start always paid (about 90s from disk, often
+far less when the OS still has the weights cached). Three things make it not
+land on the user:
+
+* `GET /api/stats` reports `models_loaded`, so the UI knows before it asks.
+* `POST /api/warm` starts the load and returns what is resident. The UI calls it
+  when the page opens, so the wait overlaps reading and uploading.
+* The page says so. A visitor who arrives during a reload gets a notice that
+  says what is happening rather than a pipeline trace that looks hung.
+
+A warm-up and a concurrent query cannot build two copies of the same weights:
+each model's lazy load is serialised and double-checked under a lock, and the
+warm-up holds the same refcount the reaper reads, so an idle unload cannot fire
+in the middle of a rebuild.
 
 ### Enabling generation
 

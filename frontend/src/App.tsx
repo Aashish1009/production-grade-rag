@@ -14,11 +14,13 @@ import { CitationList } from './components/CitationList'
 import { DocumentList } from './components/DocumentList'
 import { Dropzone } from './components/Dropzone'
 import { JobCard } from './components/JobCard'
+import { ModelNotice } from './components/ModelNotice'
 import { PipelineTrace } from './components/PipelineTrace'
 import { StatsBar } from './components/StatsBar'
 import { WebSearchCard } from './components/WebSearchCard'
 import { useJobs, isActive } from './hooks/useJobs'
 import { useDocuments } from './hooks/useDocuments'
+import { useModelWarmup } from './hooks/useModelWarmup'
 import { useStats } from './hooks/useStats'
 import type { AskResponse, StageEvent, WebAskResponse } from './types'
 
@@ -85,6 +87,14 @@ export default function App() {
   const { refresh: refreshJobs } = jobs
   const { refresh: refreshDocuments } = documents
   const { refresh: refreshStats } = stats
+
+  // Started as soon as the first stats response says the models are not
+  // resident. The error case is excluded rather than retried: a warm-up needs
+  // a server, and an offline one will be reported by the status bar already.
+  const warmup = useModelWarmup(
+    stats.data?.models_loaded === false,
+    stats.data?.models_loaded === true,
+  )
 
   const jobList = useMemo(() => jobs.data ?? [], [jobs.data])
   const activeJobs = jobList.filter(isActive)
@@ -246,7 +256,9 @@ export default function App() {
     ? { tone: 'bad', label: 'API offline' }
     : activeJobs.length
       ? { tone: 'busy', label: `${activeJobs.length} indexing` }
-      : { tone: 'live', label: 'ready' }
+      : warmup.state === 'loading'
+        ? { tone: 'busy', label: 'loading models' }
+        : { tone: 'live', label: 'ready' }
 
   // A web search has been run, or is running now. It outlives the search
   // itself: a result the reader has scrolled back to should still be there.
@@ -292,6 +304,11 @@ export default function App() {
       </header>
 
       <main className="layout">
+        {/* Spans both columns, above them: the state of the machine is not
+            either column's business, and on a reload it is the first thing
+            worth saying. */}
+        <ModelNotice state={warmup.state} seconds={warmup.seconds} />
+
         {/* ---------------- left rail ---------------- */}
         <div className="rail">
           <section className="panel">

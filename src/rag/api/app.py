@@ -30,7 +30,7 @@ import shutil
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from rag import model_lifecycle
 from rag.api.jobs import JobRegistry
 from rag.api.schemas import (
     AskRequest,
@@ -50,6 +51,7 @@ from rag.api.schemas import (
     HealthResponse,
     Job,
     StatsResponse,
+    WarmResponse,
     WebAskResponse,
     WebSearchRequest,
     WebSource,
@@ -120,9 +122,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.api_port,
             settings.qdrant_path,
         )
+
+        # The idle reaper, armed only when the setting is on. It sleeps and,
+        # once the models have gone unused for the window, frees them; see
+        # rag/model_lifecycle.py for why that is worth doing at all.
+        reaper: asyncio.Task[None] | None = None
+        if settings.model_idle_unload_minutes > 0:
+            reaper = asyncio.create_task(
+                model_lifecycle.reaper(settings.model_idle_unload_minutes)
+            )
+        else:
+            logger.info(
+                "model idle unload disabled; the models stay resident "
+                "(RAG_MODEL_IDLE_UNLOAD_MINUTES=0)"
+            )
+
         try:
             yield
         finally:
+            if reaper is not None:
+                # Awaited rather than merely cancelled: the task owns nothing
+                # the rest of shutdown needs, but abandoning it lets the loop
+                # close under it, which logs "task was destroyed but it is
+                # pending" -- a line that reads like a real failure in the log
+                # a hosted link gets debugged from.
+                reaper.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reaper
             # Release the embedded store's storage lock before the process
             # exits, so the next start is not refused by a stale lock.
             registry.shutdown(wait=False)
@@ -161,6 +187,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> HealthResponse:
         """Liveness only: no store, no model, no lock. Safe to poll."""
         return HealthResponse(version=_package_version())
+
+    @app.post("/api/warm", response_model=WarmResponse)
+    def warm_models() -> WarmResponse:
+        """Load the models now, so the next question does not pay for it.
+
+        The UI calls this once, on page open, when ``/api/stats`` reports the
+        models were released -- which is the normal state for a link nobody has
+        used recently. The load takes ~90s, and it blocks this thread rather
+        than the event loop, for the same reason every store-touching handler
+        here is a plain ``def``: a warm-up that froze the UI's own polling
+        would make the wait it exists to explain look worse.
+
+        Safe to call repeatedly and concurrently -- the second caller joins the
+        load already in flight instead of starting another (see
+        ``model_lifecycle.warm``).
+        """
+        loaded = model_lifecycle.warm()
+        return WarmResponse(loaded=loaded, models_loaded=bool(loaded))
 
     # --- ingest jobs -------------------------------------------------------
 
@@ -499,6 +543,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sparse_model=settings.sparse_model,
             reranker_model=settings.active_reranker_model,
             device=settings.resolved_device,
+            models_loaded=model_lifecycle.models_loaded(),
             retrieval_mode=settings.retrieval_mode.value,
             fetch_k=settings.fetch_k,
             top_k=settings.top_k,

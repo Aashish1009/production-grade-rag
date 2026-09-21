@@ -121,6 +121,28 @@ class Settings(BaseSettings):
         description="Cross-encoder via sentence-transformers, loaded locally.",
     )
 
+    # --- model lifecycle ---------------------------------------------------
+
+    model_idle_unload_minutes: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            "Minutes of no model use after which the dense embedder and the "
+            "cross-encoder are dropped from RAM. 0 keeps them resident "
+            "forever, which is the pre-existing behaviour.\n\n"
+            "Why this is on by default: the pair's weights are ~229MB of "
+            "committed memory (measured) held for the life of the process, so "
+            "on an always-on machine -- a link on a resume -- they are paid "
+            "24/7 whether anyone is using it or not. (The process's imports "
+            "cost ~1GB more, but no release can return those.) Measured traffic "
+            "for this app was two visitors in 66 hours. The price of dropping "
+            "them is one reload of ~90s, paid by whoever asks first after the "
+            "idle window; the UI starts that reload when the page opens, so it "
+            "usually overlaps the visitor reading or uploading rather than "
+            "being waited on. See rag/model_lifecycle.py."
+        ),
+    )
+
     # --- chunking ----------------------------------------------------------
 
     chunk_size: int = Field(
@@ -301,11 +323,22 @@ class Settings(BaseSettings):
     # "model_decommissioned"; Groq's own migration table names these gpt-oss
     # models as their replacements. Re-check before trusting these ids:
     # https://console.groq.com/docs/deprecations
+    #
+    # Verified against GET https://api.groq.com/openai/v1/models on 2026-09-21.
+    # That check was worth making: the previous second fallback was
+    # "qwen/qwen3.6-27b", which is not a Groq model at all -- the live list has
+    # "qwen/qwen3.8-27b" -- so a third of the chain errored unconditionally and
+    # the two good models were the whole safety net. The live chat-capable ids
+    # are: openai/gpt-oss-120b, openai/gpt-oss-20b, qwen/qwen3.8-27b,
+    # groq/compound, groq/compound-mini, allam-2-7b. Note that every one of
+    # them sits under the same free-tier ceiling, so a fallback chain cannot
+    # rescue a request that is simply too large -- only trimming can (see
+    # web_max_context_chars).
     groq_model: str = "groq/openai/gpt-oss-120b"
     groq_fallback_models: list[str] = Field(
         default_factory=lambda: [
             "groq/openai/gpt-oss-20b",
-            "groq/qwen/qwen3.6-27b",
+            "groq/qwen/qwen3.8-27b",
         ],
         description=(
             "Tried in order when the primary Groq model errors or is rate "
@@ -402,9 +435,41 @@ class Settings(BaseSettings):
         default=6000,
         gt=0,
         description=(
-            "Characters kept per page. Three pages at this bound is roughly "
-            "4,500 tokens, which leaves room for the answer inside a "
-            "free-tier model's context window."
+            "Characters kept per page. A per-page ceiling only -- what a "
+            "request actually costs is bounded by web_max_context_chars, "
+            "because five short pages and five long ones are the same budget "
+            "to the provider and were not the same budget here."
+        ),
+    )
+    web_max_context_chars: int = Field(
+        default=16000,
+        gt=0,
+        description=(
+            "Total characters of fetched page text in one web request; the "
+            "pages are trimmed to share it. This is the setting that decides "
+            "whether a web answer can be generated at all on a free tier.\n\n"
+            "Measured failure it exists to prevent: Groq's free tier allows "
+            "8000 tokens per minute and reserves them against the declared "
+            "max_tokens, not against what the model generates. Five Tavily "
+            "results at the 6000-char per-page ceiling is ~7,700 tokens of "
+            "context, and with a 1024-token output reservation the request is "
+            "8698 -- over the ceiling before the model is called. Every web "
+            "answer failed this way, with the sources still displayed, which "
+            "reads as 'the model is broken' rather than 'the request is too "
+            "big'. 16000 chars is ~4,000 tokens, which with web_llm_max_tokens "
+            "leaves room for a second request in the same minute."
+        ),
+    )
+    web_llm_max_tokens: int = Field(
+        default=512,
+        gt=0,
+        description=(
+            "Output reservation for the web answer, kept separate from "
+            "llm_max_tokens because the two paths have different budgets: a "
+            "web answer summarises fetched pages and is short, while a corpus "
+            "answer may be quoting passages at length. Free-tier TPM is "
+            "charged against this number whether or not it is used, so on a "
+            "tight budget it is not free to over-declare it."
         ),
     )
     web_page_max_bytes: int = Field(

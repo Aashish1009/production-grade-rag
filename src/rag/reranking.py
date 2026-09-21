@@ -33,6 +33,7 @@ from langchain_core.documents import Document
 
 from rag.config import Settings, get_settings
 from rag.logging_utils import get_logger, timed
+from rag.model_lifecycle import RERANKER_BUILD_LOCK, use
 from rag.state import MetadataKeys as MK
 
 logger = get_logger(__name__)
@@ -62,12 +63,21 @@ class LocalCrossEncoder(BaseCrossEncoder):
 
     @property
     def model(self):
-        """The cross-encoder, loaded on first use (lazy, like the embedder)."""
-        if self._model is None:
-            from sentence_transformers import CrossEncoder
+        """The cross-encoder, loaded on first use (lazy, like the embedder).
 
-            with timed(logger, f"Loading reranker {self.model_name}"):
-                self._model = CrossEncoder(self.model_name, device=self.device)
+        Serialised and re-checked under
+        :data:`~rag.model_lifecycle.RERANKER_BUILD_LOCK`, for the reason the
+        embedder's is: a query can land in the middle of the warm-up the UI
+        started when the page opened, and the second caller must wait for the
+        first rather than build a second copy of the weights.
+        """
+        if self._model is None:
+            with RERANKER_BUILD_LOCK:
+                if self._model is None:
+                    from sentence_transformers import CrossEncoder
+
+                    with timed(logger, f"Loading reranker {self.model_name}"):
+                        self._model = CrossEncoder(self.model_name, device=self.device)
         return self._model
 
     def score(self, pairs: list[tuple[str, str]]) -> list[float]:
@@ -78,14 +88,20 @@ class LocalCrossEncoder(BaseCrossEncoder):
         its candidates down to nothing would get a traceback instead of "no
         passages found". ``rerank_documents`` guards this case before it
         builds any pairs, so the branch is a backstop, not the live path.
+
+        The scoring itself runs under :func:`~rag.model_lifecycle.use`, which
+        holds the reranker open for the duration and refreshes the idle clock
+        -- reranking is the last model call in a query, so without that the
+        models would look idle from the moment the query started.
         """
         if not pairs:
             return []
-        scores = self.model.predict(
-            pairs,
-            batch_size=self.batch_size,
-            convert_to_numpy=True,
-        )
+        with use():
+            scores = self.model.predict(
+                pairs,
+                batch_size=self.batch_size,
+                convert_to_numpy=True,
+            )
         return [float(s) for s in scores]
 
 
@@ -99,6 +115,25 @@ def get_cross_encoder(settings: Settings | None = None) -> LocalCrossEncoder:
     if _CROSS_ENCODER is None:
         _CROSS_ENCODER = LocalCrossEncoder(settings)
     return _CROSS_ENCODER
+
+
+def release_cross_encoder() -> bool:
+    """Drop the loaded cross-encoder; ``True`` if there was one to drop.
+
+    Mirrors :func:`rag.embedding.release_dense_embeddings`: only ``_model`` is
+    cleared, so the singleton survives and a stale reference cannot strand a
+    dead model beside a freshly loaded second copy. Idempotent.
+    """
+    instance = _CROSS_ENCODER
+    if instance is None or instance._model is None:
+        return False
+    instance._model = None
+    return True
+
+
+def cross_encoder_loaded() -> bool:
+    """Whether the cross-encoder's weights are currently resident."""
+    return _CROSS_ENCODER is not None and _CROSS_ENCODER._model is not None
 
 
 def rerank_documents(

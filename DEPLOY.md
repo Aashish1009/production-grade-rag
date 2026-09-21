@@ -8,14 +8,47 @@ How this app is published. Read this before changing anything about hosting.
 https://laptop-q2f9a3ff.tail7fd95f.ts.net
 ```
 
-Stable. It is tied to the **machine's identity**, not to a running process, so it
-survives reboots, crashes, and restarts unchanged.
+Stable. It is tied to the **machine's identity**, not to a running process, so
+restarting the app mints no new hostname — the reason Funnel won over a
+Cloudflare quick tunnel, which produced a new link per process. It is the *URL*
+that is stable, not the reachability. Two things have to hold for the link to
+answer at all:
+
+1. **The laptop must be awake, with a signed-in session.** This is the only copy
+   of the app; it is not mirrored anywhere. Sleep, shutdown, or a locked screen
+   with no session takes the link down.
+2. **The supervisor must be alive.** `deploy/run-rag.ps1` keeps both the app and
+   the tunnel up (10 s watchdog, restarts either). It is registered as a task
+   that fires at **logon** — `LogonType Interactive`, 45 s delay — not at boot,
+   so a reboot that stops at the sign-in screen leaves the link dead until
+   someone signs in.
 
 **Live and verified as of 2026-09-18.** TLS certificate issued by Let's Encrypt,
 valid to 2026-12-17. Reachability was confirmed from *outside* the tailnet — not
 merely from this host, which resolves the MagicDNS name to `100.98.244.99` over
 the local Tailscale interface and would appear to work even if public ingress
 were broken.
+
+**This has already failed once.** On 2026-09-21 the `RAG Supervisor` task was
+found `Ready` rather than `Running`: its supervisor had been gone since
+2026-09-18 15:52 (`LastTaskResult 3221225786`, i.e. `STATUS_CONTROL_C_EXIT` —
+killed, not crashed) and nothing had restarted it, because only a logon does. The
+URL answered the whole time, because the app process itself had survived. A dead
+supervisor is invisible until the thing it watches dies too, so trust this check
+rather than the URL:
+
+```powershell
+.\deploy\run-rag.ps1 -Check
+
+  rag-server   : UP  (127.0.0.1:8000)
+  funnel       : ON
+  public URL   : https://laptop-q2f9a3ff.tail7fd95f.ts.net
+  reachable    : YES (HTTP 200)
+```
+
+Read `-Check`, not the task's state: a supervisor started by hand (a manual
+`-Restart`, as on 2026-09-21) leaves the task showing `Ready` while the link is
+perfectly served. After any reboot or logoff, sign in and wait 45 s.
 
 ## The constraints that drive every decision here
 
@@ -30,18 +63,37 @@ were broken.
 
 Two independent walls. Either one alone is fatal.
 
-**Wall 1 — it needs ~700–900 MB of RAM.** The idle process reports a misleading
-42 MB because models are lazy-loaded. Measured:
+**Wall 1 — it needs ~1.0 GB of committed memory before a model loads.** The idle
+process reports a misleading 42 MB because the models are lazy-loaded, but the
+*imports* are not: `import torch` and `import sentence_transformers` commit memory
+that is never handed back to the OS for the life of the process. Measured on this
+machine 2026-09-21, project venv, nothing touching `.model` (private = commit
+charge, the figure a host must be able to allocate; working set = resident):
 
 ```
-baseline python                      18 MB
-after import torch                  204 MB   (+186)
-after import sentence_transformers  470 MB   (+266)
-+ bge-small-en-v1.5 weights         128 MB
-+ cross-encoder reranker weights     88 MB
-──────────────────────────────────────────────
-realistic serving footprint      ~700–900 MB
+                                 private              working set
+fresh interpreter                    8 MB                   14 MB
++ import torch                     402 MB    (+394)       195 MB
++ sentence_transformers            867 MB    (+465)       450 MB
++ langchain_huggingface            888 MB                  473 MB
++ langchain_qdrant                 931 MB                  521 MB
 ```
+
+That is the floor with **no model loaded**. The weights themselves are ~230 MB on
+top of it, which the live server's own counters confirm:
+
+```
+live server, models resident     1,280 MB                  484 MB
+live server, models released     1,051 MB    (-229)        425 MB
+peak after serving questions     1,589 MB        (earlier process)
+```
+
+An earlier version of this file said ~700–900 MB. That estimate was low, and it
+was stated without a metric: it summed the libraries and the weights, which is
+working-set reasoning, and then compared the total against a private-memory
+limit. The error ran the wrong way. A 512 MB tier fails at `import torch`
+(~400 MB) and dies well before a question is asked, so every free tier is out by
+a *wider* margin than this file used to claim.
 
 Render's free tier gives 512 MB. This app crosses that line *while importing its
 libraries*, before a single model loads — it would OOM on boot, not on the first
@@ -62,6 +114,38 @@ arbitrary Python process.
 Fitting inside 512 MB would mean replacing torch with ONNX, dropping the
 cross-encoder reranker, and dropping docling/surya ingestion. That is a different,
 lesser app — and it would still be stuck on Render's 0.1 CPU.
+
+## The models are dropped when idle
+
+The link is idle almost all of the time — measured over the first 66 hours it
+served **two visits**. Holding 1.3 GB of models for a link nobody is reading is
+the waste the hosting search was about, so both models (dense embedder,
+cross-encoder) are released after `RAG_MODEL_IDLE_UNLOAD_MINUTES` (default 10)
+with no use, and rebuilt on demand.
+
+It recovers **~229 MB, not the whole footprint** — 1,280 MB private becomes
+1,051 MB. The ~1.0 GB of imports above is the floor and cannot be returned to the
+OS from a live process; only exiting frees it. That is still the right trade
+against a cold load landing inside a visitor's first question, but do not read
+this feature as "the app costs nothing while idle".
+
+**What counts as use:** an embed, a rerank, or a warm-up. A page load POSTs
+`/api/warm`, and even a no-op warm-up enters the guarded block, so each visit
+pushes the release ten minutes out — deliberate, since someone who just opened
+the page is about to ask something. The 10 s `/api/stats` poll is *not* use: a
+release was observed firing on schedule (`released dense embedder and reranker
+after 10.3 min idle`) while a browser polled throughout. Because a visit defers
+the release silently, the release line in `logs/server.log` — not the absence of
+one — is the only evidence the reaper is working.
+
+**The visitor is told.** `GET /api/stats` reports `models_loaded`, the page calls
+`POST /api/warm` on open, and while that runs the UI shows a "Loading the models"
+notice with elapsed seconds and says the wait is one-time. A document uploaded
+during the load is queued and starts indexing when it finishes. Measured warm-up
+on this machine: **8.2 s dense + 8.9 s reranker ≈ 17 s** with the weights in the
+OS page cache; ~90 s on a cold cache (immediately after a reboot).
+
+Set `RAG_MODEL_IDLE_UNLOAD_MINUTES=0` to disable unloading and keep them resident.
 
 ## The one-time Tailscale setup
 
